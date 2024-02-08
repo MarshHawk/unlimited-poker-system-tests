@@ -1,6 +1,6 @@
 import asyncio
 import aiohttp
-from .models import deal_subscription
+from .deal import deal_subscription
 
 async def init_subscription_socket(user_name):
     session = aiohttp.ClientSession()

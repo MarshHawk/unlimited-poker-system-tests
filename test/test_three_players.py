@@ -1,4 +1,5 @@
 import asyncio
+import json
 import aiohttp
 import pytest
 
@@ -14,7 +15,7 @@ async def deal(players, semaphore):
 async def play_turn():
     print("play turn")
 
-async def subscribe(user_name, semaphore):
+async def subscribe(player, semaphore):
     print("subscribe started")
     session = aiohttp.ClientSession()
     async with session.ws_connect(
@@ -29,7 +30,7 @@ async def subscribe(user_name, semaphore):
         await ws.send_json(
             {
                 "type": "connection_init",
-                "payload": {"x-user-token": user_name, "x-table-token": "123"},
+                "payload": {"x-user-token": player, "x-table-token": "123"},
             }
         )
         print("message")
@@ -48,16 +49,18 @@ async def subscribe(user_name, semaphore):
         print("I can do stuff here?")
         semaphore.release()
         print("semaphore released")
-        #assert True == False
         async for msg in ws:
-            print(msg.data)
-            #print("am i waiting?")
+            data = json.loads(msg.data)
+            if data["type"] == "data":
+                hand_player = [p for p in data["payload"]["data"]["deal"]["deal"]["players"] if p["id"] == player][0]
+                print(f"Player: {hand_player["id"]}")
+                print(f"Stack: {hand_player["stack"]}")
+                print(f"Cards: {hand_player["cards"]}")
 
 @pytest.mark.asyncio
 async def test_runs_in_a_loop():
     semaphore = asyncio.Semaphore(0)
     players = ['player_one', 'player_two', 'player_three']
     await asyncio.gather(deal(players, semaphore),subscribe(players[0], semaphore), subscribe(players[1], semaphore), subscribe(players[2], semaphore))
-    #print(wss)
-    #hand_id  = execute_deal_mutation(players)
+    
 
