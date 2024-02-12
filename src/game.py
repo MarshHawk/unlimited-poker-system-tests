@@ -20,21 +20,3 @@ async def init_subscription_socket(user_name):
             }
         )
     return ws
-
-async def subscribe_to_deal(ws, user_name):
-    deal_sub = {
-        "id": "1",
-        "type": "start",
-        "payload": {
-            "variables": {},
-            "extensions": {},
-            "operationName": "DealSubscription",
-            "query": deal_subscription,
-        },
-    }
-    await ws.send_json(deal_sub)
-    async for msg in ws:
-        print(msg.data)
-        # TODO: assert
-        return msg.data
-    
