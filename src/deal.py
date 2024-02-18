@@ -72,8 +72,8 @@ def execute_deal_mutation(players):
         "query": deal_mutation_query,
         "variables": deal_mutation_params(players),
     }
-    print("body:")
-    print(body)
+    #print("body:")
+    #print(body)
     deal = requests.post(
         "http://localhost:8097/graphql",
         json={
@@ -82,7 +82,7 @@ def execute_deal_mutation(players):
         },
         headers=deal_mutation_headers,
     )
-    print(deal.json())
+    #print(deal.json())
 
 async def subscribe_to_deal(ws, user_name):
     deal_sub = {

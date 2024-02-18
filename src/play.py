@@ -1,4 +1,5 @@
 import requests
+import asyncio
 
 
 def play_turn_payload(hand_id, player, action, amount):
@@ -13,18 +14,20 @@ def play_turn_payload(hand_id, player, action, amount):
         "query": "mutation PlayTurn($id: ID!, $playerId: ID!, $action: PlayerAction!, $amount: Decimal!) {\n  playTurn(id: $id, playerId: $playerId, action: $action, amount: $amount)\n}\n",
     }
 
-
 def play_turn_headers(player, hand_id):
     return {"X-User-Token": player, "X-Table-Token": "123", "X-Hand-Token": hand_id}
 
 
 def execute_play_hand(hand_id, player, action, amount):
+    print("executing play hand")
+    # await asyncio.sleep(5)
+    #print(play_turn_payload(hand_id, player, action, amount))
     play = requests.post(
         "http://localhost:8097/graphql",
         json=play_turn_payload(hand_id, player, action, amount),
         headers=play_turn_headers(player, hand_id),
     )
-    print(play.json())
+    #print(play.json())
 
 async def subscribe_to_play(ws, hand_id):
     play_sub = {
@@ -42,3 +45,5 @@ async def subscribe_to_play(ws, hand_id):
     async for msg in ws:
         print(msg.data)
         print("play turn")
+
+
