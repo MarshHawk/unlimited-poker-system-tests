@@ -18,7 +18,7 @@ def play_turn_headers(player, hand_id):
     return {"X-User-Token": player, "X-Table-Token": "123", "X-Hand-Token": hand_id}
 
 
-def execute_play_hand(hand_id, player, action, amount):
+def execute_play_hand(hand_id, player, action, amount, semaphore):
     print("executing play hand")
     # await asyncio.sleep(5)
     #print(play_turn_payload(hand_id, player, action, amount))
@@ -27,7 +27,6 @@ def execute_play_hand(hand_id, player, action, amount):
         json=play_turn_payload(hand_id, player, action, amount),
         headers=play_turn_headers(player, hand_id),
     )
-    #print(play.json())
 
 async def subscribe_to_play(ws, hand_id):
     play_sub = {

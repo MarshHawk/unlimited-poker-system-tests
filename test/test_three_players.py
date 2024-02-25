@@ -7,8 +7,15 @@ from src.play import execute_play_hand
 from src.deal import deal_subscription, execute_deal_mutation
 from dataclasses import dataclass
 
+from .test_data import hand_event_1, hand_event_2
+
 @dataclass
 class DealResult:
+    ws: any
+    hand_id: str
+
+@dataclass
+class PlayResult:
     ws: any
     hand_id: str
 
@@ -24,7 +31,11 @@ async def play_turn(semaphore, next_range, hand_id, player, action, amount):
     for _ in range(next_range):
         print(f"play turn semaphore acquired: {_} times")
         await semaphore.acquire()
-    execute_play_hand(hand_id, player, action, amount)
+    execute_play_hand(hand_id, player, action, amount, semaphore)
+    print(f'play_hand executed')
+    #await asyncio.sleep(0.5)
+    #semaphore.release()
+    print(f'play_turn semaphore released')
 
     # execute_deal_mutation(players)
 
@@ -109,60 +120,75 @@ async def subscribe_deal(player, semaphore):
 
 async def subscribe_play(player, hand_id, semaphore):
     session = aiohttp.ClientSession()
-    async with session.ws_connect(
+    ws = await session.ws_connect(
         "ws://127.0.0.1:8097/ws",
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",
             "Sec-Websocket-Protocol": "graphql-ws",
         },
-    ) as ws:
+    )
         #print("connected")
-        await ws.send_json(
-            {
-                "type": "connection_init",
-                "payload": {"x-user-token": player, "x-table-token": "123", "x-hand-token": hand_id},
-            }
-        )
-        play_sub = {
-          "id": hand_id,
-          "type": "start",
-          "payload": {
-              "variables": {},
-              "extensions": {},
-              "operationName": "OnHandEvent",
-              "query": "subscription OnHandEvent($mutationType: MutationType) {\n  handEvent(mutationType: $mutationType) {\n    mutationType\n    handId\n    streetEvent {\n      streetType\n      currentActivePlayers {\n        id\n        bet\n        stack\n        isInactive\n        isBigBlind\n      }\n      pot\n    }\n    playerEvent {\n      playerId\n      action\n      amount\n      streetType\n      currentStack\n      currentPot\n    }\n    cards {\n      flop\n      turn\n      river\n    }\n  }\n}\n",
-          },
+    await ws.send_json(
+        {
+            "type": "connection_init",
+            "payload": {"x-user-token": player, "x-table-token": "123", "x-hand-token": hand_id},
         }
-        print("subscribe play hand")
-        await ws.send_json(play_sub)
-        semaphore.release()
-        print("play semaphore released")
-        counter = 0
-        async for msg in ws:
-            #print(msg.data)
-            print("play turn event received")
-            
-            data = json.loads(msg.data)
-            if data["type"] == "data":
-                counter +=1
-                #print(data["payload"]["data"]["handEvent"])
-                data["payload"]["data"]["handEvent"] = f"{hand_id}"
-                assert counter == 1
+    )
+    play_sub = {
+      "id": hand_id,
+      "type": "start",
+      "payload": {
+          "variables": {},
+          "extensions": {},
+          "operationName": "OnHandEvent",
+          "query": "subscription OnHandEvent($mutationType: MutationType) {\n  handEvent(mutationType: $mutationType) {\n    mutationType\n    handId\n    streetEvent {\n      streetType\n      currentActivePlayers {\n        id\n        bet\n        stack\n        isInactive\n        isBigBlind\n      }\n      pot\n    }\n    playerEvent {\n      playerId\n      action\n      amount\n      streetType\n      currentStack\n      currentPot\n    }\n    cards {\n      flop\n      turn\n      river\n    }\n  }\n}\n",
+      },
+    }
+    print(f"subscribe play hand {player}")
+    await ws.send_json(play_sub)
+    semaphore.release()
+    print("play semaphore released")
+    counter = 0
+    async for msg in ws:
+        #print(msg.data)
+        print("play turn event received")
+        data = json.loads(msg.data)
+        if data["type"] == "data":
+            counter +=1
+            #print(data["payload"]["data"]["handEvent"])
+            print("first play turn asserts")
+            print(f"player {player}")
+            assert data["payload"] == hand_event_1(hand_id)
+            assert counter == 1
+            return ws, hand_id, player
+        print("loop waiting")
 
+async def continue_play(ws, player, hand_id, semaphore, hand_lambda):
+    semaphore.release()
+    #print("Enter the loop")
+    msg = await ws.receive()
+    assert json.loads(msg.data) == hand_lambda(hand_id)
 
 @pytest.mark.asyncio
 async def test_runs_in_a_loop():
     semaphore = asyncio.Semaphore(0)
     players = ['player_one', 'player_two', 'player_three']
-    # print("before await")
+    #print("before await")
     deal_list = await asyncio.gather(deal(players, semaphore),subscribe_deal(players[0], semaphore), subscribe_deal(players[1], semaphore), subscribe_deal(players[2], semaphore))
     deal_players = {item[2]: DealResult(item[0], item[1]) for item in deal_list[1:]}
-    print("deal players")
-    print(deal_players)
+    #print("deal players")
+    #print(deal_players)
     hand_id = deal_players['player_one'].hand_id
-    print(hand_id)
-    await asyncio.gather(subscribe_play('player_one', hand_id, semaphore), subscribe_play('player_two', hand_id, semaphore), subscribe_play('player_three', hand_id, semaphore), play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0))
+    #print(hand_id)
+    first_move_list = await asyncio.gather(subscribe_play('player_one', hand_id, semaphore), subscribe_play('player_two', hand_id, semaphore), subscribe_play('player_three', hand_id, semaphore), play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0))
+    #print(first_move_list)
+    first_move_players = {item[2]: PlayResult(item[0], item[1]) for item in first_move_list[:-1]}
+    #print(f'first_move_players: {first_move_players}')
+    await asyncio.gather(continue_play(first_move_players['player_one'].ws, 'player_one', hand_id, semaphore, hand_event_2), continue_play(first_move_players['player_two'].ws, 'player_two', hand_id, semaphore, hand_event_2), continue_play(first_move_players['player_three'].ws, 'player_three', hand_id, semaphore, hand_event_2), play_turn(semaphore, 3, hand_id, "player_one", "FOLD", 0.0))
+    # play_turn(semaphore, 3, hand_id, "player_one", "FOLD", 0.0)
     # deal_list = await asyncio.gather(deal(players, semaphore),subscribe(players[0], semaphore), subscribe(players[1], semaphore), subscribe(players[2], semaphore))
+
+
     
 
