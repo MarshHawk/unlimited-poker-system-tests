@@ -37,26 +37,18 @@ class MutationData:
     cards: Optional[str]
 
 
-from dataclasses import asdict
 import json
+from dataclasses import asdict
 
 # Create instances of ActivePlayer
 active_players = [
-    ActivePlayer(
-        id="player_one", bet="10", stack="990", isInactive=False, isBigBlind=False
-    ),
-    ActivePlayer(
-        id="player_two", bet="20", stack="980", isInactive=False, isBigBlind=True
-    ),
-    ActivePlayer(
-        id="player_three", bet="0", stack="1000", isInactive=True, isBigBlind=False
-    ),
+    ActivePlayer(id="player_one", bet="10", stack="990", isInactive=False, isBigBlind=False),
+    ActivePlayer(id="player_two", bet="20", stack="980", isInactive=False, isBigBlind=True),
+    ActivePlayer(id="player_three", bet="0", stack="1000", isInactive=True, isBigBlind=False),
 ]
 
 # Create an instance of StreetEvent
-street_event = StreetEvent(
-    streetType="PREFLOP", currentActivePlayers=active_players, pot="30"
-)
+street_event = StreetEvent(streetType="PREFLOP", currentActivePlayers=active_players, pot="30")
 
 # Create an instance of PlayerEvent
 player_event = PlayerEvent(
@@ -143,6 +135,13 @@ def hand_event_2(hand_id):
                         "streetType": "PREFLOP",
                         "currentActivePlayers": [
                             {
+                                "id": "player_one",
+                                "bet": "10",
+                                "stack": "990",
+                                "isInactive": True,
+                                "isBigBlind": False,
+                            },
+                            {
                                 "id": "player_two",
                                 "bet": "20",
                                 "stack": "980",
@@ -156,13 +155,6 @@ def hand_event_2(hand_id):
                                 "isInactive": True,
                                 "isBigBlind": False,
                             },
-                            {
-                                "id": "player_one",
-                                "bet": "10",
-                                "stack": "990",
-                                "isInactive": True,
-                                "isBigBlind": False,
-                            },
                         ],
                         "pot": "30",
                     },
@@ -171,7 +163,7 @@ def hand_event_2(hand_id):
                         "action": "FOLD",
                         "amount": "0",
                         "streetType": "PREFLOP",
-                        "currentStack": "1000",
+                        "currentStack": "990",
                         "currentPot": "30",
                     },
                     "cards": None,
