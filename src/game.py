@@ -5,7 +5,7 @@ from .deal import deal_subscription
 async def init_subscription_socket(user_name):
     session = aiohttp.ClientSession()
     async with session.ws_connect(
-        "ws://127.0.0.1:8097/ws",
+        "ws://127.0.0.1:3000/ws",
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",

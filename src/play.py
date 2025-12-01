@@ -23,7 +23,7 @@ def execute_play_hand(hand_id, player, action, amount, semaphore):
     # await asyncio.sleep(5)
     #print(play_turn_payload(hand_id, player, action, amount))
     play = requests.post(
-        "http://localhost:8097/graphql",
+        "http://localhost:3000/graphql",
         json=play_turn_payload(hand_id, player, action, amount),
         headers=play_turn_headers(player, hand_id),
     )

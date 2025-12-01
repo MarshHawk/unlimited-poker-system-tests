@@ -43,7 +43,7 @@ async def subscribe_deal(player, semaphore):
     #print("subscribe started")
     session = aiohttp.ClientSession()
     async with session.ws_connect(
-        "ws://127.0.0.1:8097/ws",
+        "ws://127.0.0.1:3000/ws",
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",
@@ -121,7 +121,7 @@ async def subscribe_deal(player, semaphore):
 async def subscribe_play(player, hand_id, semaphore):
     session = aiohttp.ClientSession()
     ws = await session.ws_connect(
-        "ws://127.0.0.1:8097/ws",
+        "ws://127.0.0.1:3000/ws",
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",

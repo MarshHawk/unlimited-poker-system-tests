@@ -75,7 +75,7 @@ def execute_deal_mutation(players):
     #print("body:")
     #print(body)
     deal = requests.post(
-        "http://localhost:8097/graphql",
+        "http://localhost:3000/graphql",
         json={
             "query": deal_mutation_query,
             "variables": deal_mutation_params(players),
