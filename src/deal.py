@@ -53,13 +53,11 @@ mutation DealHand($dealInput: DealInput!) {
 
 
 def deal_mutation_params(players, stacks=None):
+    if stacks is None:
+        stacks = {p: 1000.0 for p in players}
     return {
         "dealInput": {
-            "players": [
-                {"id": players[0], "stack": 1000.0},
-                {"id": players[1], "stack": 1000.0},
-                {"id": players[2], "stack": 1000.0},
-            ],
+            "players": [{"id": p, "stack": stacks.get(p, 1000.0)} for p in players],
             "tableId": "123",
         }
     }
@@ -67,22 +65,18 @@ def deal_mutation_params(players, stacks=None):
 
 deal_mutation_headers = {"X-User-Token": "", "X-Table-Token": ""}
 
-def execute_deal_mutation(players):
-    body = {
-        "query": deal_mutation_query,
-        "variables": deal_mutation_params(players),
-    }
-    #print("body:")
-    #print(body)
+
+def execute_deal_mutation(players, stacks=None):
     deal = requests.post(
         "http://localhost:3000/graphql",
         json={
             "query": deal_mutation_query,
-            "variables": deal_mutation_params(players),
+            "variables": deal_mutation_params(players, stacks),
         },
         headers=deal_mutation_headers,
     )
-    #print(deal.json())
+    return deal.json()
+
 
 async def subscribe_to_deal(ws, user_name):
     deal_sub = {
@@ -100,4 +94,3 @@ async def subscribe_to_deal(ws, user_name):
         print(msg.data)
         # TODO: assert
         return msg.data
-    
