@@ -295,34 +295,34 @@ def test_full_game_to_showdown():
         json={"handId": hand_id, "playerId": "bob", "action": "Check", "amount": "0"},
     )
 
-    # Flop: Both check
-    requests.post(
-        f"{BASE_URL}/api/hands/{hand_id}/play",
-        json={"handId": hand_id, "playerId": "alice", "action": "Check", "amount": "0"},
-    )
+    # Flop (heads-up postflop): BB acts first, then SB
     requests.post(
         f"{BASE_URL}/api/hands/{hand_id}/play",
         json={"handId": hand_id, "playerId": "bob", "action": "Check", "amount": "0"},
     )
-
-    # Turn: Both check
     requests.post(
         f"{BASE_URL}/api/hands/{hand_id}/play",
         json={"handId": hand_id, "playerId": "alice", "action": "Check", "amount": "0"},
     )
+
+    # Turn: BB acts first, then SB
     requests.post(
         f"{BASE_URL}/api/hands/{hand_id}/play",
         json={"handId": hand_id, "playerId": "bob", "action": "Check", "amount": "0"},
     )
-
-    # River: Both check - game should end
     requests.post(
         f"{BASE_URL}/api/hands/{hand_id}/play",
         json={"handId": hand_id, "playerId": "alice", "action": "Check", "amount": "0"},
+    )
+
+    # River: BB acts first, then SB (final action) - game should end
+    requests.post(
+        f"{BASE_URL}/api/hands/{hand_id}/play",
+        json={"handId": hand_id, "playerId": "bob", "action": "Check", "amount": "0"},
     )
     response = requests.post(
         f"{BASE_URL}/api/hands/{hand_id}/play",
-        json={"handId": hand_id, "playerId": "bob", "action": "Check", "amount": "0"},
+        json={"handId": hand_id, "playerId": "alice", "action": "Check", "amount": "0"},
     )
 
     assert response.status_code == 200

@@ -85,6 +85,13 @@ def hand_event_1(hand_id):
                     "streetType": "PREFLOP",
                     "currentActivePlayers": [
                         {
+                            "id": "player_three",
+                            "bet": "0",
+                            "stack": "1000",
+                            "isInactive": True,
+                            "isBigBlind": False,
+                        },
+                        {
                             "id": "player_one",
                             "bet": "10",
                             "stack": "990",
@@ -97,13 +104,6 @@ def hand_event_1(hand_id):
                             "stack": "980",
                             "isInactive": False,
                             "isBigBlind": True,
-                        },
-                        {
-                            "id": "player_three",
-                            "bet": "0",
-                            "stack": "1000",
-                            "isInactive": True,
-                            "isBigBlind": False,
                         },
                     ],
                     "pot": "30",
@@ -135,6 +135,13 @@ def hand_event_2(hand_id):
                         "streetType": "PREFLOP",
                         "currentActivePlayers": [
                             {
+                                "id": "player_three",
+                                "bet": "0",
+                                "stack": "1000",
+                                "isInactive": True,
+                                "isBigBlind": False,
+                            },
+                            {
                                 "id": "player_one",
                                 "bet": "10",
                                 "stack": "990",
@@ -147,13 +154,6 @@ def hand_event_2(hand_id):
                                 "stack": "980",
                                 "isInactive": False,
                                 "isBigBlind": True,
-                            },
-                            {
-                                "id": "player_three",
-                                "bet": "0",
-                                "stack": "1000",
-                                "isInactive": True,
-                                "isBigBlind": False,
                             },
                         ],
                         "pot": "30",

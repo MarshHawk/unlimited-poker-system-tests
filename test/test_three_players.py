@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import aiohttp
 import pytest
+import requests
 from src.deal import deal_subscription, execute_deal_mutation
 from src.play import execute_play_hand
 
@@ -20,6 +21,8 @@ class DealResult:
 class PlayResult:
     ws: any
     hand_id: str
+
+WS_EVENT_TIMEOUT_SECONDS = 15
 
 
 async def deal(players, semaphore, stacks=None):
@@ -139,8 +142,10 @@ async def subscribe_play(player, hand_id, semaphore):
     semaphore.release()
     print("play semaphore released")
     counter = 0
-    async for msg in ws:
-        # print(msg.data)
+    while True:
+        msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
+        if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+            raise AssertionError(f"WebSocket closed before data event for {player}")
         print("play turn event received")
         data = json.loads(msg.data)
         if data["type"] == "data":
@@ -157,7 +162,7 @@ async def subscribe_play(player, hand_id, semaphore):
 async def continue_play(ws, player, hand_id, semaphore, hand_lambda):
     semaphore.release()
     # print("Enter the loop")
-    msg = await ws.receive()
+    msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
     assert json.loads(msg.data) == hand_lambda(hand_id)
 
 
@@ -199,73 +204,82 @@ async def test_runs_in_a_loop():
 # Expected stacks after: player_one=990, player_two=1010, player_three=1000
 # Next hand: rotated blinds - player_two=SB, player_three=BB, player_one=UTG
 # =============================================================================
-@pytest.mark.asyncio
-async def test_scenario_1_all_except_bb_fold():
+def test_scenario_1_all_except_bb_fold():
     """Test: UTG and SB fold, BB wins the pot. Verify blind rotation for next hand."""
-    semaphore = asyncio.Semaphore(0)
+
+    def gql(query, variables=None, headers=None):
+        resp = requests.post(
+            "http://localhost:3000/graphql",
+            json={"query": query, "variables": variables or {}},
+            headers=headers or {},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "errors" not in payload, payload.get("errors")
+        return payload["data"]
+
+    def play(hand_id, player, action, amount):
+        data = gql(
+            "mutation PlayTurn($id: ID!, $playerId: ID!, $action: PlayerAction!, $amount: Decimal!) { playTurn(id: $id, playerId: $playerId, action: $action, amount: $amount) }",
+            {
+                "id": hand_id,
+                "playerId": player,
+                "action": action,
+                "amount": amount,
+            },
+            {"X-User-Token": player, "X-Table-Token": "123", "X-Hand-Token": hand_id},
+        )
+        assert data["playTurn"] == hand_id
 
     # Hand 1: player_one=SB, player_two=BB, player_three=UTG
-    players_hand1 = ["player_one", "player_two", "player_three"]
-    initial_stacks = {"player_one": 1000.0, "player_two": 1000.0, "player_three": 1000.0}
-
-    # Deal hand 1
-    deal_list = await asyncio.gather(
-        deal(players_hand1, semaphore, initial_stacks),
-        subscribe_deal(players_hand1[0], semaphore),
-        subscribe_deal(players_hand1[1], semaphore),
-        subscribe_deal(players_hand1[2], semaphore),
+    deal1 = execute_deal_mutation(
+        ["player_one", "player_two", "player_three"],
+        {"player_one": 1000.0, "player_two": 1000.0, "player_three": 1000.0},
     )
+    assert "errors" not in deal1
+    hand1_id = deal1["data"]["deal"]
 
-    deal_players = {item[2]: DealResult(item[0], item[1]) for item in deal_list[1:]}
-    hand_id = deal_players["player_one"].hand_id
+    # player_three folds, then player_one folds -> player_two wins
+    play(hand1_id, "player_three", "FOLD", 0.0)
+    play(hand1_id, "player_one", "FOLD", 0.0)
 
-    # Verify initial stacks (SB=990, BB=980, UTG=1000)
-    # Subscribe to play events and execute folds
-    first_move_list = await asyncio.gather(
-        subscribe_play("player_one", hand_id, semaphore),
-        subscribe_play("player_two", hand_id, semaphore),
-        subscribe_play("player_three", hand_id, semaphore),
-        play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0),  # UTG folds
+    hand1 = gql(
+        "query Hand($id: ID!) { hand(id: $id) { isComplete winnerId players { id stack } } }",
+        {"id": hand1_id},
+    )["hand"]
+    assert hand1["isComplete"] is True
+    assert hand1["winnerId"] == "player_two"
+    hand1_stacks = {p["id"]: p["stack"] for p in hand1["players"]}
+    assert hand1_stacks["player_one"] == "990"
+    assert hand1_stacks["player_two"] == "1010"
+    assert hand1_stacks["player_three"] == "1000"
+
+    # Hand 2: rotate players so blinds rotate (player_two=SB, player_three=BB, player_one=UTG)
+    deal2 = execute_deal_mutation(
+        ["player_two", "player_three", "player_one"],
+        {"player_one": 990.0, "player_two": 1010.0, "player_three": 1000.0},
     )
+    assert "errors" not in deal2
+    hand2_id = deal2["data"]["deal"]
 
-    first_move_players = {item[2]: PlayResult(item[0], item[1]) for item in first_move_list[:-1]}
+    hand2 = gql(
+        "query Hand($id: ID!) { hand(id: $id) { streetEvents { streetType currentActivePlayers { id bet stack isInactive isBigBlind } } } }",
+        {"id": hand2_id},
+    )["hand"]
+    active = hand2["streetEvents"][0]["currentActivePlayers"]
+    assert [p["id"] for p in active] == ["player_one", "player_two", "player_three"]
 
-    # player_one (SB) folds - BB wins
-    await asyncio.gather(
-        continue_play(first_move_players["player_one"].ws, "player_one", hand_id, semaphore, hand_event_2),
-        continue_play(first_move_players["player_two"].ws, "player_two", hand_id, semaphore, hand_event_2),
-        continue_play(first_move_players["player_three"].ws, "player_three", hand_id, semaphore, hand_event_2),
-        play_turn(semaphore, 3, hand_id, "player_one", "FOLD", 0.0),  # SB folds
-    )
+    by_id = {p["id"]: p for p in active}
+    assert by_id["player_two"]["bet"] == "10"
+    assert by_id["player_two"]["stack"] == "1000"
+    assert by_id["player_two"]["isBigBlind"] is False
 
-    # After hand 1: player_two wins 30
-    # Expected stacks: player_one=990, player_two=1010, player_three=1000
-    expected_stacks_after_hand1 = {
-        "player_one": 990.0,
-        "player_two": 1010.0,  # 980 + 30 pot
-        "player_three": 1000.0,
-    }
+    assert by_id["player_three"]["bet"] == "20"
+    assert by_id["player_three"]["stack"] == "980"
+    assert by_id["player_three"]["isBigBlind"] is True
 
-    # Hand 2: Rotate blinds - player_two=SB, player_three=BB, player_one=UTG
-    semaphore2 = asyncio.Semaphore(0)
-    players_hand2 = ["player_two", "player_three", "player_one"]  # Rotated order
-
-    # Expected states for hand 2 after blind rotation
-    expected_hand2_states = {
-        "player_two": {"id": "player_two", "bet": "10", "stack": "1000", "isInactive": False},  # SB: 1010-10
-        "player_three": {"id": "player_three", "bet": "20", "stack": "980", "isInactive": False},  # BB: 1000-20
-        "player_one": {"id": "player_one", "bet": "0", "stack": "990", "isInactive": False},  # UTG: unchanged
-    }
-
-    deal_list2 = await asyncio.gather(
-        deal(players_hand2, semaphore2, expected_stacks_after_hand1),
-        subscribe_deal("player_two", semaphore2, expected_hand2_states["player_two"]),
-        subscribe_deal("player_three", semaphore2, expected_hand2_states["player_three"]),
-        subscribe_deal("player_one", semaphore2, expected_hand2_states["player_one"]),
-    )
-
-    print("✓ Scenario 1 completed - Verified blind rotation for hand 2")
-    print(f"  Hand 2: player_two=SB(10), player_three=BB(20), player_one=UTG")
+    assert by_id["player_one"]["bet"] == "0"
+    assert by_id["player_one"]["stack"] == "990"
 
 
 # =============================================================================
@@ -278,37 +292,55 @@ async def test_scenario_1_all_except_bb_fold():
 @pytest.mark.asyncio
 async def test_scenario_2_sb_raises_bb_folds():
     """Test: UTG folds, SB raises, BB folds. SB wins."""
-    semaphore = asyncio.Semaphore(0)
+    deal_payload = execute_deal_mutation(["player_one", "player_two", "player_three"],
+                                         {"player_one": 1000.0, "player_two": 1000.0, "player_three": 1000.0})
+    assert "errors" not in deal_payload
+    hand_id = deal_payload["data"]["deal"]
 
-    players = ["player_one", "player_two", "player_three"]
-    initial_stacks = {"player_one": 1000.0, "player_two": 1000.0, "player_three": 1000.0}
+    def play(player, action, amount):
+        resp = requests.post(
+            "http://localhost:3000/graphql",
+            json={
+                "operationName": "PlayTurn",
+                "variables": {
+                    "id": hand_id,
+                    "playerId": player,
+                    "action": action,
+                    "amount": amount,
+                },
+                "query": "mutation PlayTurn($id: ID!, $playerId: ID!, $action: PlayerAction!, $amount: Decimal!) { playTurn(id: $id, playerId: $playerId, action: $action, amount: $amount) }",
+            },
+            headers={"X-User-Token": player, "X-Table-Token": "123", "X-Hand-Token": hand_id},
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "errors" not in payload, payload.get("errors")
+        return payload["data"]["playTurn"]
 
-    # Deal hand
-    deal_list = await asyncio.gather(
-        deal(players, semaphore, initial_stacks),
-        subscribe_deal(players[0], semaphore),
-        subscribe_deal(players[1], semaphore),
-        subscribe_deal(players[2], semaphore),
+    # UTG folds, SB raises from 10 -> 40 (add 30), BB folds
+    play("player_three", "FOLD", 0.0)
+    play("player_one", "BET", 30.0)
+    play("player_two", "FOLD", 0.0)
+
+    # Verify winner and stacks through GraphQL query
+    hand_resp = requests.post(
+        "http://localhost:3000/graphql",
+        json={
+            "query": "query Hand($id: ID!) { hand(id: $id) { isComplete winnerId players { id stack } } }",
+            "variables": {"id": hand_id},
+        },
     )
+    assert hand_resp.status_code == 200
+    hand_data = hand_resp.json()
+    assert "errors" not in hand_data, hand_data.get("errors")
+    hand = hand_data["data"]["hand"]
 
-    deal_players = {item[2]: DealResult(item[0], item[1]) for item in deal_list[1:]}
-    hand_id = deal_players["player_one"].hand_id
-
-    # Subscribe to play events
-    first_move_list = await asyncio.gather(
-        subscribe_play("player_one", hand_id, semaphore),
-        subscribe_play("player_two", hand_id, semaphore),
-        subscribe_play("player_three", hand_id, semaphore),
-        play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0),  # UTG folds
-    )
-
-    first_move_players = {item[2]: PlayResult(item[0], item[1]) for item in first_move_list[:-1]}
-
-    # player_one (SB) raises to 40 (adds 30 more)
-    # Note: We need a second continue_play to handle the raise response
-    # For now, simplified test - just verify the fold flow works
-    print("✓ Scenario 2: UTG folded, SB would raise, BB would fold")
-    print("  (Full raise implementation requires additional event handling)")
+    assert hand["isComplete"] is True
+    assert hand["winnerId"] == "player_one"
+    stacks = {p["id"]: p["stack"] for p in hand["players"]}
+    assert stacks["player_one"] == "1020"
+    assert stacks["player_two"] == "980"
+    assert stacks["player_three"] == "1000"
 
 
 # =============================================================================
@@ -561,7 +593,7 @@ async def play_and_wait_all(play_ws, semaphore, hand_id, player, action, amount)
     # Wait for each subscriber to receive the event
     events = []
     for p, ws in play_ws.items():
-        msg = await ws.receive()
+        msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
         data = json.loads(msg.data)
         events.append(data)
         semaphore.release()
