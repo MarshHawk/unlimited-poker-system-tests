@@ -48,14 +48,14 @@ active_players = [
 ]
 
 # Create an instance of StreetEvent
-street_event = StreetEvent(streetType="PREFLOP", currentActivePlayers=active_players, pot="30")
+street_event = StreetEvent(streetType="Preflop", currentActivePlayers=active_players, pot="30")
 
 # Create an instance of PlayerEvent
 player_event = PlayerEvent(
     playerId="player_three",
-    action="FOLD",
+    action="Fold",
     amount="0",
-    streetType="PREFLOP",
+    streetType="Preflop",
     currentStack="1000",
     currentPot="30",
 )
@@ -81,8 +81,16 @@ def hand_event_1(hand_id):
             "handEvent": {
                 "mutationType": "UPDATED",
                 "handId": hand_id,
+                "tableConfig": {
+                    "smallBlind": "10",
+                    "bigBlind": "20",
+                    "buttonIndex": 2,
+                },
+                "buttonIndex": 2,
+                "smallBlindIndex": 0,
+                "bigBlindIndex": 1,
                 "streetEvent": {
-                    "streetType": "PREFLOP",
+                    "streetType": "Preflop",
                     "currentActivePlayers": [
                         {
                             "id": "player_three",
@@ -110,9 +118,9 @@ def hand_event_1(hand_id):
                 },
                 "playerEvent": {
                     "playerId": "player_three",
-                    "action": "FOLD",
+                    "action": "Fold",
                     "amount": "0",
-                    "streetType": "PREFLOP",
+                    "streetType": "Preflop",
                     "currentStack": "1000",
                     "currentPot": "30",
                 },
@@ -131,8 +139,16 @@ def hand_event_2(hand_id):
                 "handEvent": {
                     "mutationType": "UPDATED",
                     "handId": hand_id,
+                    "tableConfig": {
+                        "smallBlind": "10",
+                        "bigBlind": "20",
+                        "buttonIndex": 2,
+                    },
+                    "buttonIndex": 2,
+                    "smallBlindIndex": 0,
+                    "bigBlindIndex": 1,
                     "streetEvent": {
-                        "streetType": "PREFLOP",
+                        "streetType": "Preflop",
                         "currentActivePlayers": [
                             {
                                 "id": "player_three",
@@ -160,13 +176,15 @@ def hand_event_2(hand_id):
                     },
                     "playerEvent": {
                         "playerId": "player_one",
-                        "action": "FOLD",
+                        "action": "Fold",
                         "amount": "0",
-                        "streetType": "PREFLOP",
+                        "streetType": "Preflop",
                         "currentStack": "990",
                         "currentPot": "30",
                     },
                     "cards": None,
+                    "isComplete": True,
+                    "winnerId": "player_two",
                 }
             }
         },

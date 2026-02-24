@@ -1,6 +1,8 @@
 import requests
 import asyncio
 
+HTTP_TIMEOUT_SECONDS = 5
+
 
 def play_turn_payload(hand_id, player, action, amount):
     return {
@@ -26,6 +28,7 @@ def execute_play_hand(hand_id, player, action, amount, semaphore):
         "http://localhost:3000/graphql",
         json=play_turn_payload(hand_id, player, action, amount),
         headers=play_turn_headers(player, hand_id),
+        timeout=HTTP_TIMEOUT_SECONDS,
     )
 
 async def subscribe_to_play(ws, hand_id):
@@ -33,6 +36,7 @@ async def subscribe_to_play(ws, hand_id):
         "id": hand_id,
         "type": "start",
         "payload": {
+            "x-hand-token": hand_id,
             "variables": {},
             "extensions": {},
             "operationName": "OnHandEvent",
@@ -44,5 +48,3 @@ async def subscribe_to_play(ws, hand_id):
     async for msg in ws:
         print(msg.data)
         print("play turn")
-
-

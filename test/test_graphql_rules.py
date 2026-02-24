@@ -1,10 +1,15 @@
 import requests
 
 BASE_URL = "http://localhost:3000/graphql"
+HTTP_TIMEOUT_SECONDS = 5
 
 
 def graphql(query: str, variables: dict | None = None):
-    resp = requests.post(BASE_URL, json={"query": query, "variables": variables or {}})
+    resp = requests.post(
+        BASE_URL,
+        json={"query": query, "variables": variables or {}},
+        timeout=HTTP_TIMEOUT_SECONDS,
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert "errors" not in data, data.get("errors")

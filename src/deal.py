@@ -1,5 +1,7 @@
 import requests
 
+HTTP_TIMEOUT_SECONDS = 5
+
 deal_subscription = """
 subscription DealSubscription($mutationType: MutationType) {
   deal(mutationType: $mutationType) {
@@ -74,6 +76,7 @@ def execute_deal_mutation(players, stacks=None):
             "variables": deal_mutation_params(players, stacks),
         },
         headers=deal_mutation_headers,
+        timeout=HTTP_TIMEOUT_SECONDS,
     )
     return deal.json()
 

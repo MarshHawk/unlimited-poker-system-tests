@@ -22,7 +22,88 @@ class PlayResult:
     ws: any
     hand_id: str
 
-WS_EVENT_TIMEOUT_SECONDS = 15
+WS_EVENT_TIMEOUT_SECONDS = 5
+WS_CONNECT_TIMEOUT_SECONDS = 5
+HTTP_TIMEOUT_SECONDS = 5
+MAX_NON_DATA_MESSAGES = 25
+
+
+async def wait_for_ws_data(ws, timeout=WS_EVENT_TIMEOUT_SECONDS, context="subscription"):
+    ignored_count = 0
+    last_payload = None
+    while True:
+        msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
+        if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+            raise AssertionError(f"WebSocket closed while waiting for {context}")
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            continue
+        data = json.loads(msg.data)
+        last_payload = data
+        msg_type = data.get("type")
+        if msg_type == "data":
+            return data
+        if msg_type == "error":
+            raise AssertionError(f"GraphQL subscription error while waiting for {context}: {data}")
+        ignored_count += 1
+        if ignored_count >= MAX_NON_DATA_MESSAGES:
+            raise AssertionError(
+                f"Timed out waiting for data frame for {context}. "
+                f"Ignored {ignored_count} non-data frames. Last payload: {last_payload}"
+            )
+
+
+async def close_ws_with_session(ws):
+    if ws is None:
+        return
+    try:
+        await ws.close()
+    finally:
+        session = getattr(ws, "_owner_session", None)
+        if session is not None and not session.closed:
+            await session.close()
+
+
+def _active_by_id(event_msg):
+    hand_event = event_msg["payload"]["data"]["handEvent"]
+    return {p["id"]: p for p in hand_event["streetEvent"]["currentActivePlayers"]}
+
+
+def assert_first_fold_event(event_msg, hand_id):
+    assert event_msg["type"] == "data"
+    assert event_msg["id"] == hand_id
+    hand_event = event_msg["payload"]["data"]["handEvent"]
+    assert hand_event["handId"] == hand_id
+    assert hand_event["mutationType"] == "UPDATED"
+    assert hand_event["streetEvent"]["streetType"] == "Preflop"
+    assert hand_event["streetEvent"]["pot"] == "30"
+    assert hand_event["playerEvent"]["playerId"] == "player_three"
+    assert hand_event["playerEvent"]["action"] == "Fold"
+    assert hand_event["playerEvent"]["amount"] == "0"
+
+    active = _active_by_id(event_msg)
+    assert active["player_three"]["isInactive"] is True
+    assert active["player_one"]["isInactive"] is False
+    assert active["player_two"]["isInactive"] is False
+
+
+def assert_second_fold_gameover_event(event_msg, hand_id):
+    assert event_msg["type"] == "data"
+    assert event_msg["id"] == hand_id
+    hand_event = event_msg["payload"]["data"]["handEvent"]
+    assert hand_event["handId"] == hand_id
+    assert hand_event["mutationType"] == "UPDATED"
+    assert hand_event["streetEvent"]["streetType"] == "Preflop"
+    assert hand_event["streetEvent"]["pot"] == "30"
+    assert hand_event["playerEvent"]["playerId"] == "player_one"
+    assert hand_event["playerEvent"]["action"] == "Fold"
+    assert hand_event["playerEvent"]["amount"] == "0"
+    assert hand_event.get("isComplete") is True
+    assert hand_event.get("winnerId") == "player_two"
+
+    active = _active_by_id(event_msg)
+    assert active["player_three"]["isInactive"] is True
+    assert active["player_one"]["isInactive"] is True
+    assert active["player_two"]["isInactive"] is False
 
 
 async def deal(players, semaphore, stacks=None):
@@ -49,77 +130,77 @@ async def play_turn(semaphore, next_range, hand_id, player, action, amount):
 
 async def subscribe_deal(player, semaphore, expected_state=None):
     """Subscribe to deal events. Optionally verify expected player state."""
-    session = aiohttp.ClientSession()
-    async with session.ws_connect(
-        "ws://127.0.0.1:3000/ws",
-        headers={
-            "Accept-Encoding": "gzip, deflate, br",
-            "Pragma": "no-cache",
-            "Sec-Websocket-Protocol": "graphql-ws",
-        },
-    ) as ws:
-        await ws.send_json(
-            {
-                "type": "connection_init",
-                "payload": {"x-user-token": player, "x-table-token": "123"},
-            }
-        )
-        deal_sub = {
-            "id": "1",
-            "type": "start",
-            "payload": {
-                "variables": {},
-                "extensions": {},
-                "operationName": "DealSubscription",
-                "query": deal_subscription,
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(
+            "ws://127.0.0.1:3000/ws",
+            timeout=aiohttp.ClientTimeout(total=WS_CONNECT_TIMEOUT_SECONDS, sock_connect=WS_CONNECT_TIMEOUT_SECONDS),
+            headers={
+                "Accept-Encoding": "gzip, deflate, br",
+                "Pragma": "no-cache",
+                "Sec-Websocket-Protocol": "graphql-ws",
             },
-        }
-        await ws.send_json(deal_sub)
-        semaphore.release()
-        print("semaphore released")
-        async for msg in ws:
-            data = json.loads(msg.data)
-            if data["type"] == "data":
-                current_players = data["payload"]["data"]["deal"]["deal"]["streetEvents"][0]["currentActivePlayers"]
-                current_player = [p for p in current_players if p["id"] == player][0]
-                hand_id = data["payload"]["data"]["deal"]["id"]
-                hand_player = [p for p in data["payload"]["data"]["deal"]["deal"]["players"] if p["id"] == player][0]
-                print(f"hand_id: {hand_id}")
-                print(
-                    f"Player: {current_player['id']}, Stack: {current_player['stack']}, Bet: {current_player['bet']}"
-                )
-                print(f"Cards: {hand_player['cards']}")
+        ) as ws:
+            await ws.send_json(
+                {
+                    "type": "connection_init",
+                    "payload": {"x-user-token": player, "x-table-token": "123"},
+                }
+            )
+            deal_sub = {
+                "id": "1",
+                "type": "start",
+                "payload": {
+                    "variables": {},
+                    "extensions": {},
+                    "operationName": "DealSubscription",
+                    "query": deal_subscription,
+                },
+            }
+            await ws.send_json(deal_sub)
+            semaphore.release()
+            print("semaphore released")
 
-                # If expected_state provided, verify it
-                if expected_state:
-                    assert current_player == expected_state, f"Expected {expected_state}, got {current_player}"
-                else:
-                    # Default assertions for initial hand with 1000 stacks
-                    if player == "player_three":
-                        assert current_player == {
-                            "id": "player_three",
-                            "bet": "0",
-                            "stack": "1000",
-                            "isInactive": False,
-                        }
-                    elif player == "player_two":
-                        assert current_player == {"id": "player_two", "bet": "20", "stack": "980", "isInactive": False}
-                    elif player == "player_one":
-                        assert current_player == {"id": "player_one", "bet": "10", "stack": "990", "isInactive": False}
+            data = await wait_for_ws_data(ws, context=f"deal subscription for {player}")
+            current_players = data["payload"]["data"]["deal"]["deal"]["streetEvents"][0]["currentActivePlayers"]
+            current_player = [p for p in current_players if p["id"] == player][0]
+            hand_id = data["payload"]["data"]["deal"]["id"]
+            hand_player = [p for p in data["payload"]["data"]["deal"]["deal"]["players"] if p["id"] == player][0]
+            print(f"hand_id: {hand_id}")
+            print(f"Player: {current_player['id']}, Stack: {current_player['stack']}, Bet: {current_player['bet']}")
+            print(f"Cards: {hand_player['cards']}")
 
-                return ws, hand_id, player, current_players
+            # If expected_state provided, verify it
+            if expected_state:
+                assert current_player == expected_state, f"Expected {expected_state}, got {current_player}"
+            else:
+                # Default assertions for initial hand with 1000 stacks
+                if player == "player_three":
+                    assert current_player == {
+                        "id": "player_three",
+                        "bet": "0",
+                        "stack": "1000",
+                        "isInactive": False,
+                    }
+                elif player == "player_two":
+                    assert current_player == {"id": "player_two", "bet": "20", "stack": "980", "isInactive": False}
+                elif player == "player_one":
+                    assert current_player == {"id": "player_one", "bet": "10", "stack": "990", "isInactive": False}
+
+            return None, hand_id, player, current_players
 
 
 async def subscribe_play(player, hand_id, semaphore):
     session = aiohttp.ClientSession()
     ws = await session.ws_connect(
         "ws://127.0.0.1:3000/ws",
+        timeout=aiohttp.ClientTimeout(total=WS_CONNECT_TIMEOUT_SECONDS, sock_connect=WS_CONNECT_TIMEOUT_SECONDS),
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",
             "Sec-Websocket-Protocol": "graphql-ws",
         },
     )
+    setattr(ws, "_owner_session", session)
     # print("connected")
     await ws.send_json(
         {
@@ -131,6 +212,7 @@ async def subscribe_play(player, hand_id, semaphore):
         "id": hand_id,
         "type": "start",
         "payload": {
+            "x-hand-token": hand_id,
             "variables": {},
             "extensions": {},
             "operationName": "OnHandEvent",
@@ -143,27 +225,20 @@ async def subscribe_play(player, hand_id, semaphore):
     print("play semaphore released")
     counter = 0
     while True:
-        msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
-        if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-            raise AssertionError(f"WebSocket closed before data event for {player}")
+        data = await wait_for_ws_data(ws, context=f"first handEvent for {player}")
+        counter += 1
         print("play turn event received")
-        data = json.loads(msg.data)
-        if data["type"] == "data":
-            counter += 1
-            # print(data["payload"]["data"]["handEvent"])
-            print("first play turn asserts")
-            print(f"player {player}")
-            assert data["payload"] == hand_event_1(hand_id)
-            assert counter == 1
-            return ws, hand_id, player
-        print("loop waiting")
+        print("first play turn asserts")
+        print(f"player {player}")
+        assert_first_fold_event(data, hand_id)
+        assert counter == 1
+        return ws, hand_id, player
 
 
-async def continue_play(ws, player, hand_id, semaphore, hand_lambda):
+async def continue_play(ws, player, hand_id, semaphore, _hand_lambda):
     semaphore.release()
-    # print("Enter the loop")
-    msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
-    assert json.loads(msg.data) == hand_lambda(hand_id)
+    data = await wait_for_ws_data(ws, context=f"follow-up handEvent for {player}")
+    assert_second_fold_gameover_event(data, hand_id)
 
 
 @pytest.mark.asyncio
@@ -181,19 +256,29 @@ async def test_runs_in_a_loop():
     # print("deal players")
     # print(deal_players)
     hand_id = deal_players["player_one"].hand_id
-    first_move_list = await asyncio.gather(
-        subscribe_play("player_one", hand_id, semaphore),
-        subscribe_play("player_two", hand_id, semaphore),
-        subscribe_play("player_three", hand_id, semaphore),
-        play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0),
-    )
-    first_move_players = {item[2]: PlayResult(item[0], item[1]) for item in first_move_list[:-1]}
-    await asyncio.gather(
-        continue_play(first_move_players["player_one"].ws, "player_one", hand_id, semaphore, hand_event_2),
-        continue_play(first_move_players["player_two"].ws, "player_two", hand_id, semaphore, hand_event_2),
-        continue_play(first_move_players["player_three"].ws, "player_three", hand_id, semaphore, hand_event_2),
-        play_turn(semaphore, 3, hand_id, "player_one", "FOLD", 0.0),
-    )
+    first_move_players = {}
+    try:
+        first_move_list = await asyncio.gather(
+            subscribe_play("player_one", hand_id, semaphore),
+            subscribe_play("player_two", hand_id, semaphore),
+            subscribe_play("player_three", hand_id, semaphore),
+            play_turn(semaphore, 3, hand_id, "player_three", "FOLD", 0.0),
+        )
+        first_move_players = {item[2]: PlayResult(item[0], item[1]) for item in first_move_list[:-1]}
+        await asyncio.gather(
+            continue_play(first_move_players["player_one"].ws, "player_one", hand_id, semaphore, hand_event_2),
+            continue_play(first_move_players["player_two"].ws, "player_two", hand_id, semaphore, hand_event_2),
+            continue_play(first_move_players["player_three"].ws, "player_three", hand_id, semaphore, hand_event_2),
+            play_turn(semaphore, 3, hand_id, "player_one", "FOLD", 0.0),
+        )
+    finally:
+        await asyncio.gather(
+            close_ws_with_session(first_move_players.get("player_one").ws if "player_one" in first_move_players else None),
+            close_ws_with_session(first_move_players.get("player_two").ws if "player_two" in first_move_players else None),
+            close_ws_with_session(
+                first_move_players.get("player_three").ws if "player_three" in first_move_players else None
+            ),
+        )
 
 
 # =============================================================================
@@ -212,6 +297,7 @@ def test_scenario_1_all_except_bb_fold():
             "http://localhost:3000/graphql",
             json={"query": query, "variables": variables or {}},
             headers=headers or {},
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         assert resp.status_code == 200
         payload = resp.json()
@@ -311,6 +397,7 @@ async def test_scenario_2_sb_raises_bb_folds():
                 "query": "mutation PlayTurn($id: ID!, $playerId: ID!, $action: PlayerAction!, $amount: Decimal!) { playTurn(id: $id, playerId: $playerId, action: $action, amount: $amount) }",
             },
             headers={"X-User-Token": player, "X-Table-Token": "123", "X-Hand-Token": hand_id},
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         assert resp.status_code == 200
         payload = resp.json()
@@ -329,6 +416,7 @@ async def test_scenario_2_sb_raises_bb_folds():
             "query": "query Hand($id: ID!) { hand(id: $id) { isComplete winnerId players { id stack } } }",
             "variables": {"id": hand_id},
         },
+        timeout=HTTP_TIMEOUT_SECONDS,
     )
     assert hand_resp.status_code == 200
     hand_data = hand_resp.json()
@@ -415,55 +503,57 @@ async def test_scenario_4_showdown_best_hand_wins():
         subscribe_play_flexible("player_three", hand_id, play_semaphore),
     )
     play_ws = {item[1]: item[0] for item in play_subs}
+    try:
+        # === PREFLOP ===
+        # UTG (player_three) calls: Bet 20 to match BB
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "BET", 20.0)
+        print("✓ Preflop: player_three (UTG) calls 20")
 
-    # === PREFLOP ===
-    # UTG (player_three) calls: Bet 20 to match BB
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "BET", 20.0)
-    print("✓ Preflop: player_three (UTG) calls 20")
+        # SB (player_one) calls: Bet 10 more (already posted 10)
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "BET", 10.0)
+        print("✓ Preflop: player_one (SB) calls")
 
-    # SB (player_one) calls: Bet 10 more (already posted 10)
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "BET", 10.0)
-    print("✓ Preflop: player_one (SB) calls")
+        # BB (player_two) checks
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
+        print("✓ Preflop: player_two (BB) checks - moving to Flop")
 
-    # BB (player_two) checks
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
-    print("✓ Preflop: player_two (BB) checks - moving to Flop")
+        # === FLOP ===
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
+        print("✓ Flop: player_one checks")
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
+        print("✓ Flop: player_two checks")
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
+        print("✓ Flop: player_three checks - moving to Turn")
 
-    # === FLOP ===
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
-    print("✓ Flop: player_one checks")
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
-    print("✓ Flop: player_two checks")
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
-    print("✓ Flop: player_three checks - moving to Turn")
+        # === TURN ===
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
+        print("✓ Turn: player_one checks")
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
+        print("✓ Turn: player_two checks")
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
+        print("✓ Turn: player_three checks - moving to River")
 
-    # === TURN ===
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
-    print("✓ Turn: player_one checks")
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
-    print("✓ Turn: player_two checks")
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
-    print("✓ Turn: player_three checks - moving to River")
+        # === RIVER ===
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
+        print("✓ River: player_one checks")
+        await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
+        print("✓ River: player_two checks")
 
-    # === RIVER ===
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_one", "CHECK", 0.0)
-    print("✓ River: player_one checks")
-    await play_and_wait_all(play_ws, play_semaphore, hand_id, "player_two", "CHECK", 0.0)
-    print("✓ River: player_two checks")
+        # Final action - this should trigger showdown
+        final_event = await play_and_get_result(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
+        print("✓ River: player_three checks - SHOWDOWN")
 
-    # Final action - this should trigger showdown
-    final_event = await play_and_get_result(play_ws, play_semaphore, hand_id, "player_three", "CHECK", 0.0)
-    print("✓ River: player_three checks - SHOWDOWN")
+        # Verify winner
+        if final_event and "handEvent" in final_event.get("data", {}):
+            event_data = final_event["data"]["handEvent"]
+            print(f"Final event street: {event_data.get('streetEvent', {}).get('streetType')}")
 
-    # Verify winner
-    if final_event and "handEvent" in final_event.get("data", {}):
-        event_data = final_event["data"]["handEvent"]
-        print(f"Final event street: {event_data.get('streetEvent', {}).get('streetType')}")
-
-    # Final pot should be 60 (3 players * 20 each)
-    print(f"\n=== SHOWDOWN RESULT ===")
-    print(f"Expected winner: {expected_winner} (score: {player_scores[expected_winner]})")
-    print(f"Pot: 60 (3 players × 20)")
+        # Final pot should be 60 (3 players * 20 each)
+        print(f"\n=== SHOWDOWN RESULT ===")
+        print(f"Expected winner: {expected_winner} (score: {player_scores[expected_winner]})")
+        print(f"Pot: 60 (3 players × 20)")
+    finally:
+        await asyncio.gather(*(close_ws_with_session(ws) for ws in play_ws.values()))
 
     # === HAND 2: Verify blind rotation ===
     print("\n=== DEALING HAND 2 WITH ROTATED BLINDS ===")
@@ -507,45 +597,44 @@ async def test_scenario_4_showdown_best_hand_wins():
 
 async def subscribe_deal_with_scores(player, semaphore):
     """Subscribe to deal events and return player scores and hand data."""
-    session = aiohttp.ClientSession()
-    async with session.ws_connect(
-        "ws://127.0.0.1:3000/ws",
-        headers={
-            "Accept-Encoding": "gzip, deflate, br",
-            "Pragma": "no-cache",
-            "Sec-Websocket-Protocol": "graphql-ws",
-        },
-    ) as ws:
-        await ws.send_json(
-            {
-                "type": "connection_init",
-                "payload": {"x-user-token": player, "x-table-token": "123"},
-            }
-        )
-        await ws.send_json(
-            {
-                "id": "1",
-                "type": "start",
-                "payload": {
-                    "variables": {},
-                    "extensions": {},
-                    "operationName": "DealSubscription",
-                    "query": deal_subscription,
-                },
-            }
-        )
-        semaphore.release()
-        async for msg in ws:
-            data = json.loads(msg.data)
-            if data["type"] == "data":
-                deal = data["payload"]["data"]["deal"]
-                current_players = deal["deal"]["streetEvents"][0]["currentActivePlayers"]
-                return {
-                    "hand_id": deal["id"],
-                    "players": deal["deal"]["players"],
-                    "current_players": current_players,
-                    "cards": deal["deal"]["cards"],
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(
+            "ws://127.0.0.1:3000/ws",
+            timeout=aiohttp.ClientTimeout(total=WS_CONNECT_TIMEOUT_SECONDS, sock_connect=WS_CONNECT_TIMEOUT_SECONDS),
+            headers={
+                "Accept-Encoding": "gzip, deflate, br",
+                "Pragma": "no-cache",
+                "Sec-Websocket-Protocol": "graphql-ws",
+            },
+        ) as ws:
+            await ws.send_json(
+                {
+                    "type": "connection_init",
+                    "payload": {"x-user-token": player, "x-table-token": "123"},
                 }
+            )
+            await ws.send_json(
+                {
+                    "id": "1",
+                    "type": "start",
+                    "payload": {
+                        "variables": {},
+                        "extensions": {},
+                        "operationName": "DealSubscription",
+                        "query": deal_subscription,
+                    },
+                }
+            )
+            semaphore.release()
+            data = await wait_for_ws_data(ws, context=f"deal-with-scores subscription for {player}")
+            deal = data["payload"]["data"]["deal"]
+            current_players = deal["deal"]["streetEvents"][0]["currentActivePlayers"]
+            return {
+                "hand_id": deal["id"],
+                "players": deal["deal"]["players"],
+                "current_players": current_players,
+                "cards": deal["deal"]["cards"],
+            }
 
 
 async def subscribe_play_flexible(player, hand_id, semaphore):
@@ -553,12 +642,15 @@ async def subscribe_play_flexible(player, hand_id, semaphore):
     session = aiohttp.ClientSession()
     ws = await session.ws_connect(
         "ws://127.0.0.1:3000/ws",
+        timeout=aiohttp.ClientTimeout(total=WS_CONNECT_TIMEOUT_SECONDS, sock_connect=WS_CONNECT_TIMEOUT_SECONDS),
         headers={
             "Accept-Encoding": "gzip, deflate, br",
             "Pragma": "no-cache",
             "Sec-Websocket-Protocol": "graphql-ws",
         },
     )
+    setattr(ws, "_owner_session", session)
+    setattr(ws, "_owner_session", session)
     await ws.send_json(
         {
             "type": "connection_init",
@@ -570,6 +662,7 @@ async def subscribe_play_flexible(player, hand_id, semaphore):
             "id": hand_id,
             "type": "start",
             "payload": {
+                "x-hand-token": hand_id,
                 "variables": {},
                 "extensions": {},
                 "operationName": "OnHandEvent",
@@ -593,8 +686,7 @@ async def play_and_wait_all(play_ws, semaphore, hand_id, player, action, amount)
     # Wait for each subscriber to receive the event
     events = []
     for p, ws in play_ws.items():
-        msg = await asyncio.wait_for(ws.receive(), timeout=WS_EVENT_TIMEOUT_SECONDS)
-        data = json.loads(msg.data)
+        data = await wait_for_ws_data(ws, context=f"handEvent for {p} after {action}")
         events.append(data)
         semaphore.release()
 

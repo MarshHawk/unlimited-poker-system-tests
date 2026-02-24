@@ -7,6 +7,24 @@ import pytest
 import requests
 
 BASE_URL = "http://localhost:3000"
+HTTP_TIMEOUT_SECONDS = 5
+
+_requests_post = requests.post
+_requests_get = requests.get
+
+
+def _post_with_timeout(*args, **kwargs):
+    kwargs.setdefault("timeout", HTTP_TIMEOUT_SECONDS)
+    return _requests_post(*args, **kwargs)
+
+
+def _get_with_timeout(*args, **kwargs):
+    kwargs.setdefault("timeout", HTTP_TIMEOUT_SECONDS)
+    return _requests_get(*args, **kwargs)
+
+
+requests.post = _post_with_timeout
+requests.get = _get_with_timeout
 
 
 def test_health_check():
